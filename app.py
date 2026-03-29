@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, redirect, url_for
+from flask import Flask, request, render_template_string, redirect
 import pandas as pd
 import json
 import os
@@ -29,6 +29,9 @@ def get_saved():
 def save_to_file(saved):
     with open(SAVED_FILE, "w") as f:
         json.dump(saved, f)
+
+def get_saved_names():
+    return [r.get(df.columns[1]) for r in get_saved()]
 
 CARD_STYLE = """
         body { font-family: Arial; padding: 20px; background: #f9f9f9; }
@@ -177,7 +180,7 @@ PAGE_A_HTML = """
             {% endfor %}
         </div>
     {% else %}
-        <p>No positions saved yet. Click the Save button on any position to add it here!</p>
+        <p>No positions saved yet!</p>
     {% endif %}
 </body>
 </html>
@@ -194,12 +197,15 @@ def search():
     per_page = 50
 
     excluded = get_excluded()
+    saved_names = get_saved_names()
 
     state_list = [s.strip() for s in states.split(",")]
     mask = df.iloc[:, 4].str.contains("|".join(state_list), case=False, na=False)
     filtered = df[mask].reset_index(drop=True)
 
+    # Remove excluded and saved names from main page
     filtered = filtered[~filtered.iloc[:, 1].isin(excluded)]
+    filtered = filtered[~filtered.iloc[:, 1].isin(saved_names)]
     filtered = filtered.sort_values(by=filtered.columns[1]).reset_index(drop=True)
 
     total = len(filtered)
