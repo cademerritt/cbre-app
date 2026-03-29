@@ -44,7 +44,7 @@ HTML = """
         </form>
         {% if excluded %}
             <br><b>Excluded names ({{ excluded|length }}):</b> {{ excluded|join(", ") }}
-            <a href="/clear?states={{ states }}" style="margin-left:10px; color: #003087;">Clear All</a>
+            <a href="/clear?states={{ states }}" style="margin-left:10px; color: #cc0000;">Clear All</a>
         {% endif %}
     </div>
 
@@ -55,7 +55,7 @@ HTML = """
             <div class="card">
                 <a href="/not?name={{ row.name|urlencode }}&states={{ states }}&page={{ page }}" class="not-btn">NOT</a>
                 <div class="city">{{ row.city }}</div>
-                <a href="{{ row.link }}" target="_blank" class="name">{{ row.name }}</a>
+                <a href="/detail?name={{ row.name|urlencode }}" target="_blank" class="name">{{ row.name }}</a>
             </div>
             {% endfor %}
         </div>
@@ -81,6 +81,36 @@ HTML = """
 </html>
 """
 
+DETAIL_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ name }}</title>
+    <style>
+        body { font-family: Arial; padding: 40px; background: #f9f9f9; }
+        h1 { color: #003087; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th { background: #003087; color: white; padding: 10px; text-align: left; }
+        td { border: 1px solid #ddd; padding: 10px; }
+        tr:nth-child(even) { background: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>{{ name }}</h1>
+    <table>
+        {% for key, val in details.items() %}
+        <tr>
+            <th>{{ key }}</th>
+            <td>{{ val }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <br>
+    <a href="javascript:window.close()">Close</a>
+</body>
+</html>
+"""
+
 @app.route("/")
 def index():
     return render_template_string(HTML)
@@ -97,10 +127,7 @@ def search():
     mask = df.iloc[:, 4].str.contains("|".join(state_list), case=False, na=False)
     filtered = df[mask].reset_index(drop=True)
 
-    # Remove excluded names
     filtered = filtered[~filtered.iloc[:, 1].isin(excluded)]
-
-    # Alphabetize by name
     filtered = filtered.sort_values(by=filtered.columns[1]).reset_index(drop=True)
 
     total = len(filtered)
@@ -113,18 +140,26 @@ def search():
     for _, row in page_df.iterrows():
         name = str(row.iloc[1])
         city = str(row.iloc[5])
-        link = f"https://www.google.com/search?q=CBRE+{name.replace(' ', '+')}"
-        results.append({"name": name, "city": city, "link": link})
+        results.append({"name": name, "city": city})
 
     return render_template_string(HTML, results=results, states=states,
                                    page=page, total=total, total_pages=total_pages,
                                    excluded=excluded)
 
+@app.route("/detail")
+def detail():
+    name = request.args.get("name", "")
+    match = df[df.iloc[:, 1] == name]
+    if match.empty:
+        return "Not found", 404
+    row = match.iloc[0]
+    details = {col: row[col] for col in df.columns}
+    return render_template_string(DETAIL_HTML, name=name, details=details)
+
 @app.route("/not")
 def not_name():
     name = request.args.get("name", "")
     states = request.args.get("states", "")
-    page = request.args.get("page", 1)
 
     excluded = session.get("excluded", [])
     if name not in excluded:
