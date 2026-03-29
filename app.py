@@ -30,12 +30,7 @@ def save_to_file(saved):
     with open(SAVED_FILE, "w") as f:
         json.dump(saved, f)
 
-HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>CBRE Open Positions</title>
-    <style>
+CARD_STYLE = """
         body { font-family: Arial; padding: 20px; background: #f9f9f9; }
         h1 { color: #003087; }
         input { padding: 8px; font-size: 16px; margin: 5px; width: 300px; }
@@ -56,10 +51,19 @@ HTML = """
         .not-btn:hover { background: #990000; }
         .page-a-btn { float: right; padding: 8px 16px; background: #006400; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; }
         .page-a-btn:hover { background: #004d00; }
-    </style>
+        .remove-btn { position: absolute; bottom: 8px; right: 8px; background: #cc0000; color: white; border: none; border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer; text-decoration: none; }
+        .remove-btn:hover { background: #990000; }
+"""
+
+HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CBRE Open Positions</title>
+    <style>""" + CARD_STYLE + """</style>
 </head>
 <body>
-    <h1>CBRE Open Positions <a href="/page-a" target="_blank" class="page-a-btn">View Page A</a></h1>
+    <h1>CBRE Open Positions <a href="/page-a" target="_blank" class="page-a-btn">View Page A ({{ saved_count }})</a></h1>
 
     <div class="menu">
         <b>Search by State(s)</b><br>
@@ -69,7 +73,7 @@ HTML = """
             <button type="submit">Search</button>
         </form>
         {% if excluded %}
-            <br><b>Excluded names ({{ excluded|length }}):</b> {{ excluded|join(", ") }}
+            <br><b>Excluded ({{ excluded|length }}):</b> {{ excluded|join(", ") }}
             <a href="/clear?states={{ states }}" style="margin-left:10px; color: #cc0000;">Clear All</a>
         {% endif %}
     </div>
@@ -102,7 +106,6 @@ HTML = """
             {% endif %}
         </div>
     {% endif %}
-
 </body>
 </html>
 """
@@ -153,35 +156,26 @@ PAGE_A_HTML = """
 <html>
 <head>
     <title>Page A — Saved Positions</title>
-    <style>
-        body { font-family: Arial; padding: 40px; background: #f9f9f9; }
-        h1 { color: #003087; }
-        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-        th { background: #003087; color: white; padding: 10px; text-align: left; }
-        td { border: 1px solid #ddd; padding: 10px; }
-        tr:nth-child(even) { background: #f2f2f2; }
-        .clear-btn { padding: 8px 16px; background: #cc0000; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 14px; }
-        .clear-btn:hover { background: #990000; }
-    </style>
+    <style>""" + CARD_STYLE + """</style>
 </head>
 <body>
     <h1>Page A — Saved Positions</h1>
-    <a href="/clear-page-a" class="clear-btn">Clear All</a>
+
+    <div class="menu">
+        <b>{{ saved|length }} saved positions</b>
+        <a href="/clear-page-a" style="margin-left:10px; color: #cc0000;">Clear All</a>
+    </div>
+
     {% if saved %}
-        <table>
-            <tr>
-                {% for col in columns %}
-                <th>{{ col }}</th>
-                {% endfor %}
-            </tr>
+        <div class="grid">
             {% for row in saved %}
-            <tr>
-                {% for col in columns %}
-                <td>{{ row.get(col, '') }}</td>
-                {% endfor %}
-            </tr>
+            <div class="card">
+                <a href="/remove-saved?name={{ row[name_col]|urlencode }}" class="remove-btn">REMOVE</a>
+                <div class="city">{{ row[city_col] }}</div>
+                <a href="/detail?name={{ row[name_col]|urlencode }}" target="_blank" class="name">{{ row[name_col] }}</a>
+            </div>
             {% endfor %}
-        </table>
+        </div>
     {% else %}
         <p>No positions saved yet. Click the Save button on any position to add it here!</p>
     {% endif %}
@@ -191,7 +185,7 @@ PAGE_A_HTML = """
 
 @app.route("/")
 def index():
-    return render_template_string(HTML)
+    return render_template_string(HTML, saved_count=len(get_saved()))
 
 @app.route("/search", methods=["GET"])
 def search():
@@ -222,13 +216,14 @@ def search():
 
     return render_template_string(HTML, results=results, states=states,
                                    page=page, total=total, total_pages=total_pages,
-                                   excluded=excluded)
+                                   excluded=excluded, saved_count=len(get_saved()))
 
 @app.route("/detail")
 def detail():
     name = request.args.get("name", "")
+    saved_param = request.args.get("saved", "0")
     saved_list = get_saved()
-    already_saved = any(r.get(df.columns[1]) == name for r in saved_list)
+    already_saved = any(r.get(df.columns[1]) == name for r in saved_list) or saved_param == "1"
     match = df[df.iloc[:, 1] == name]
     if match.empty:
         return "Not found", 404
@@ -247,18 +242,27 @@ def save():
         if not any(r.get(df.columns[1]) == name for r in saved_list):
             saved_list.append(details)
             save_to_file(saved_list)
-    return redirect(url_for("detail", name=name) + "&saved=1")
+    return redirect("/detail?name=" + name + "&saved=1")
 
 @app.route("/page-a")
 def page_a():
     saved_list = get_saved()
-    columns = list(df.columns)
-    return render_template_string(PAGE_A_HTML, saved=saved_list, columns=columns)
+    name_col = df.columns[1]
+    city_col = df.columns[5]
+    return render_template_string(PAGE_A_HTML, saved=saved_list, name_col=name_col, city_col=city_col)
+
+@app.route("/remove-saved")
+def remove_saved():
+    name = request.args.get("name", "")
+    saved_list = get_saved()
+    saved_list = [r for r in saved_list if r.get(df.columns[1]) != name]
+    save_to_file(saved_list)
+    return redirect("/page-a")
 
 @app.route("/clear-page-a")
 def clear_page_a():
     save_to_file([])
-    return redirect(url_for("page_a"))
+    return redirect("/page-a")
 
 @app.route("/not")
 def not_name():
