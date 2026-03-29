@@ -1,10 +1,34 @@
-from flask import Flask, request, render_template_string, session
+from flask import Flask, request, render_template_string, redirect, url_for
 import pandas as pd
+import json
+import os
 
 app = Flask(__name__)
-app.secret_key = "cbre123"
 
 df = pd.read_csv("C:/Users/Cade/positions.csv", encoding="latin1")
+
+EXCLUDED_FILE = "C:/Users/Cade/excluded.json"
+SAVED_FILE = "C:/Users/Cade/saved.json"
+
+def get_excluded():
+    if os.path.exists(EXCLUDED_FILE):
+        with open(EXCLUDED_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+def save_excluded(excluded):
+    with open(EXCLUDED_FILE, "w") as f:
+        json.dump(excluded, f)
+
+def get_saved():
+    if os.path.exists(SAVED_FILE):
+        with open(SAVED_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+def save_to_file(saved):
+    with open(SAVED_FILE, "w") as f:
+        json.dump(saved, f)
 
 HTML = """
 <!DOCTYPE html>
@@ -30,10 +54,12 @@ HTML = """
         .card a.name:hover { text-decoration: underline; }
         .not-btn { position: absolute; top: 8px; right: 8px; background: #cc0000; color: white; border: none; border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer; text-decoration: none; }
         .not-btn:hover { background: #990000; }
+        .page-a-btn { float: right; padding: 8px 16px; background: #006400; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; }
+        .page-a-btn:hover { background: #004d00; }
     </style>
 </head>
 <body>
-    <h1>CBRE Open Positions</h1>
+    <h1>CBRE Open Positions <a href="/page-a" target="_blank" class="page-a-btn">View Page A</a></h1>
 
     <div class="menu">
         <b>Search by State(s)</b><br>
@@ -89,6 +115,10 @@ DETAIL_HTML = """
     <style>
         body { font-family: Arial; padding: 40px; background: #f9f9f9; }
         h1 { color: #003087; }
+        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .save-btn { padding: 10px 20px; background: #006400; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; text-decoration: none; }
+        .save-btn:hover { background: #004d00; }
+        .saved-msg { color: green; font-weight: bold; font-size: 16px; }
         table { border-collapse: collapse; width: 100%; margin-top: 20px; }
         th { background: #003087; color: white; padding: 10px; text-align: left; }
         td { border: 1px solid #ddd; padding: 10px; }
@@ -96,7 +126,14 @@ DETAIL_HTML = """
     </style>
 </head>
 <body>
-    <h1>{{ name }}</h1>
+    <div class="top-bar">
+        <h1>{{ name }}</h1>
+        {% if saved %}
+            <span class="saved-msg">✅ Saved to Page A!</span>
+        {% else %}
+            <a href="/save?name={{ name|urlencode }}" class="save-btn">💾 Save to Page A</a>
+        {% endif %}
+    </div>
     <table>
         {% for key, val in details.items() %}
         <tr>
@@ -111,6 +148,47 @@ DETAIL_HTML = """
 </html>
 """
 
+PAGE_A_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Page A — Saved Positions</title>
+    <style>
+        body { font-family: Arial; padding: 40px; background: #f9f9f9; }
+        h1 { color: #003087; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th { background: #003087; color: white; padding: 10px; text-align: left; }
+        td { border: 1px solid #ddd; padding: 10px; }
+        tr:nth-child(even) { background: #f2f2f2; }
+        .clear-btn { padding: 8px 16px; background: #cc0000; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 14px; }
+        .clear-btn:hover { background: #990000; }
+    </style>
+</head>
+<body>
+    <h1>Page A — Saved Positions</h1>
+    <a href="/clear-page-a" class="clear-btn">Clear All</a>
+    {% if saved %}
+        <table>
+            <tr>
+                {% for col in columns %}
+                <th>{{ col }}</th>
+                {% endfor %}
+            </tr>
+            {% for row in saved %}
+            <tr>
+                {% for col in columns %}
+                <td>{{ row.get(col, '') }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </table>
+    {% else %}
+        <p>No positions saved yet. Click the Save button on any position to add it here!</p>
+    {% endif %}
+</body>
+</html>
+"""
+
 @app.route("/")
 def index():
     return render_template_string(HTML)
@@ -121,7 +199,7 @@ def search():
     page = int(request.args.get("page", 1))
     per_page = 50
 
-    excluded = session.get("excluded", [])
+    excluded = get_excluded()
 
     state_list = [s.strip() for s in states.split(",")]
     mask = df.iloc[:, 4].str.contains("|".join(state_list), case=False, na=False)
@@ -149,28 +227,54 @@ def search():
 @app.route("/detail")
 def detail():
     name = request.args.get("name", "")
+    saved_list = get_saved()
+    already_saved = any(r.get(df.columns[1]) == name for r in saved_list)
     match = df[df.iloc[:, 1] == name]
     if match.empty:
         return "Not found", 404
     row = match.iloc[0]
     details = {col: row[col] for col in df.columns}
-    return render_template_string(DETAIL_HTML, name=name, details=details)
+    return render_template_string(DETAIL_HTML, name=name, details=details, saved=already_saved)
+
+@app.route("/save")
+def save():
+    name = request.args.get("name", "")
+    match = df[df.iloc[:, 1] == name]
+    if not match.empty:
+        row = match.iloc[0]
+        details = {col: str(row[col]) for col in df.columns}
+        saved_list = get_saved()
+        if not any(r.get(df.columns[1]) == name for r in saved_list):
+            saved_list.append(details)
+            save_to_file(saved_list)
+    return redirect(url_for("detail", name=name) + "&saved=1")
+
+@app.route("/page-a")
+def page_a():
+    saved_list = get_saved()
+    columns = list(df.columns)
+    return render_template_string(PAGE_A_HTML, saved=saved_list, columns=columns)
+
+@app.route("/clear-page-a")
+def clear_page_a():
+    save_to_file([])
+    return redirect(url_for("page_a"))
 
 @app.route("/not")
 def not_name():
     name = request.args.get("name", "")
     states = request.args.get("states", "")
 
-    excluded = session.get("excluded", [])
+    excluded = get_excluded()
     if name not in excluded:
         excluded.append(name)
-    session["excluded"] = excluded
+    save_excluded(excluded)
 
     return search()
 
 @app.route("/clear")
 def clear():
-    session["excluded"] = []
+    save_excluded([])
     return search()
 
 if __name__ == "__main__":
